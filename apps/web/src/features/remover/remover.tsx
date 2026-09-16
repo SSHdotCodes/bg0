@@ -125,6 +125,17 @@ function fileFromClipboard(data: DataTransfer | null): File | null {
   return null
 }
 
+function fileFromDrop(data: DataTransfer): File | null {
+  const file = data.files.item?.(0) ?? data.files[0]
+  if (file) return file
+  for (const item of Array.from(data.items)) {
+    if (item.kind !== 'file') continue
+    const file = item.getAsFile()
+    if (file) return file
+  }
+  return null
+}
+
 function clipboardImagesSupported() {
   return (
     typeof navigator !== 'undefined' &&
@@ -383,25 +394,36 @@ export function Remover({
   useEffect(() => {
     let depth = 0
     const onEnter = (event: DragEvent) => {
-      if (!event.dataTransfer?.types.includes('Files')) return
+      if (!event.dataTransfer) return
       event.preventDefault()
       depth += 1
       setIsDragging(true)
     }
     const onOver = (event: DragEvent) => {
-      if (!event.dataTransfer?.types.includes('Files')) return
+      if (!event.dataTransfer) return
       event.preventDefault()
+      event.dataTransfer.dropEffect = 'copy'
     }
     const onLeave = () => {
       depth = Math.max(0, depth - 1)
       if (depth === 0) setIsDragging(false)
     }
     const onDrop = (event: DragEvent) => {
-      if (!event.dataTransfer?.files.length) return
+      // Photos can expose a file URL without granting access to the file.
+      // Cancel navigation even when there is no readable file in the drop.
       event.preventDefault()
       depth = 0
       setIsDragging(false)
-      selectFiles(event.dataTransfer.files, 'drop')
+      if (!event.dataTransfer) return
+      const file = fileFromDrop(event.dataTransfer)
+      if (file) {
+        void process(file, 'drop')
+      } else {
+        notify(
+          'That drop did not include a readable file. Export the photo from Photos, then choose or drop the exported file.',
+          'error',
+        )
+      }
     }
     window.addEventListener('dragenter', onEnter)
     window.addEventListener('dragover', onOver)
@@ -413,7 +435,7 @@ export function Remover({
       window.removeEventListener('dragleave', onLeave)
       window.removeEventListener('drop', onDrop)
     }
-  }, [selectFiles])
+  }, [process, notify])
 
   // Paste anywhere on the page.
   useEffect(() => {
@@ -759,7 +781,11 @@ export function Remover({
       <p className="sr-only" aria-live="polite">
         {announcement}
       </p>
-      <Toast message={toast} onDone={dismissToast} />
+      <Toast
+        message={toast}
+        onDone={dismissToast}
+        durationMs={toast?.tone === 'error' ? 6000 : 2200}
+      />
       <div
         aria-hidden={!pickerOffscreen}
         className={cn(
