@@ -297,6 +297,7 @@ function resultWithSource(): BackgroundRemovalResult {
     provider: 'wasm',
     quality: 'quality',
     durationMs: 10,
+    model: 'birefnet-lite',
   }
 }
 

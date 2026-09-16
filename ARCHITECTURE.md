@@ -7,7 +7,7 @@ file picker / drop / paste
             ↓
       @bg0/browser
             ↓
-cached BiRefNet-lite ONNX model
+hardware-selected BiRefNet ONNX model
             ↓
        WebGPU / WASM
             ↓
@@ -49,6 +49,29 @@ choices and predefined failure reasons. Survey configuration must not add free
 text or response choices outside that allowlist. Exception reports use
 controlled error categories and only same-origin JavaScript source locations;
 arbitrary exception messages and stack text stay in the browser.
+
+## Automatic model selection
+
+`@bg0/browser` probes an actual WebGPU adapter before choosing a model. Supported
+Chromium browsers with fp16 shaders, a 256 MiB buffer limit, a 128 MiB storage
+binding limit, and no reported RAM limit below 4 GiB prefer full BiRefNet.
+Missing RAM hints do not exclude otherwise capable devices. The full Swin-L
+model uses a browser-compatible 512px export; the lite Swin-T export also takes
+512px input. Both weights and processor configurations are pinned by revision.
+
+Known low-memory devices retain lite on WebGPU. Without a usable fp16 GPU,
+browsers reporting at least four logical CPU cores and no RAM hint below 4 GiB
+use full BiRefNet on WASM; iOS and less capable or unknown CPUs retain lite.
+A full-model loading or inference failure falls back to lite on the same
+provider, then lite on WASM if necessary.
+Failed full-model and GPU engines are skipped for the page session and disposed
+when no inference is using them. A full-model failure does not disable lite WebGPU.
+The existing `quality` option controls mask refinement independently of model
+selection. Detection and fallback stay inside the browser package.
+
+Transformers.js 4 is required for the full export's GPU operators. The unpatched
+1024px full export exceeds browser shader binding limits; increasing available
+RAM alone does not make that graph usable.
 
 ## Model cache
 
