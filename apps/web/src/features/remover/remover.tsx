@@ -125,6 +125,22 @@ function fileFromClipboard(data: DataTransfer | null): File | null {
   return null
 }
 
+function isFileTransfer(data: DataTransfer): boolean {
+  if (
+    data.files.length > 0 ||
+    Array.from(data.items).some((item) => item.kind === 'file') ||
+    data.types.includes('Files') ||
+    data.types.includes('public.file-url')
+  ) {
+    return true
+  }
+  // String contents may be hidden until drop. Only claim a string-only transfer
+  // when it exposes a local file URL; ordinary text and web links stay native.
+  return [data.getData('text/uri-list'), data.getData('text/plain')].some(
+    (value) => value.split(/\r?\n/).some((line) => /^file:/i.test(line.trim())),
+  )
+}
+
 function fileFromDrop(data: DataTransfer): File | null {
   const file = data.files.item?.(0) ?? data.files[0]
   if (file) return file
@@ -394,13 +410,13 @@ export function Remover({
   useEffect(() => {
     let depth = 0
     const onEnter = (event: DragEvent) => {
-      if (!event.dataTransfer) return
+      if (!event.dataTransfer || !isFileTransfer(event.dataTransfer)) return
       event.preventDefault()
       depth += 1
       setIsDragging(true)
     }
     const onOver = (event: DragEvent) => {
-      if (!event.dataTransfer) return
+      if (!event.dataTransfer || !isFileTransfer(event.dataTransfer)) return
       event.preventDefault()
       event.dataTransfer.dropEffect = 'copy'
     }
@@ -409,12 +425,12 @@ export function Remover({
       if (depth === 0) setIsDragging(false)
     }
     const onDrop = (event: DragEvent) => {
+      depth = 0
+      setIsDragging(false)
+      if (!event.dataTransfer || !isFileTransfer(event.dataTransfer)) return
       // Photos can expose a file URL without granting access to the file.
       // Cancel navigation even when there is no readable file in the drop.
       event.preventDefault()
-      depth = 0
-      setIsDragging(false)
-      if (!event.dataTransfer) return
       const file = fileFromDrop(event.dataTransfer)
       if (file) {
         void process(file, 'drop')

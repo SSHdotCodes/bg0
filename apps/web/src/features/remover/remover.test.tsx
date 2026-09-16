@@ -280,6 +280,23 @@ describe('Remover image pickers', () => {
 })
 
 describe('Remover image drops', () => {
+  test.each([
+    ['text/plain', 'ordinary selected text'],
+    ['text/uri-list', 'https://example.com/'],
+  ])('leaves ordinary %s drags to the browser', (type, value) => {
+    const remove = mock(() => Promise.resolve(resultWithSource()))
+    const view = render(<Remover removeBackgroundImpl={remove} />)
+    const transfer = new DataTransfer()
+    transfer.setData(type, value)
+
+    expect(fireEvent.dragEnter(window, { dataTransfer: transfer })).toBe(true)
+    expect(fireEvent.dragOver(window, { dataTransfer: transfer })).toBe(true)
+    expect(fireEvent.drop(window, { dataTransfer: transfer })).toBe(true)
+    expect(view.getByText('Drop an image anywhere on this page')).toBeTruthy()
+    expect(view.queryByText(/Export the photo from Photos/)).toBeNull()
+    expect(remove).not.toHaveBeenCalled()
+  })
+
   test.each(['text/uri-list', 'text/plain'])(
     'prevents navigation for a Photos file link exposed as %s',
     async (type) => {
