@@ -416,9 +416,19 @@ export function Remover({
       setIsDragging(true)
     }
     const onOver = (event: DragEvent) => {
-      if (!event.dataTransfer || !isFileTransfer(event.dataTransfer)) return
+      const data = event.dataTransfer
+      if (!data) return
+      const fileTransfer = isFileTransfer(data)
+      // Protected strings are unreadable until drop. Admit potential file URLs
+      // without showing the image overlay or consuming an ordinary text/link
+      // drop. Editable controls already accept text with their native behavior.
+      const protectedString =
+        !isEditableTarget(event.target) &&
+        (data.types.includes('text/uri-list') ||
+          data.types.includes('text/plain'))
+      if (!fileTransfer && !protectedString) return
       event.preventDefault()
-      event.dataTransfer.dropEffect = 'copy'
+      if (fileTransfer) data.dropEffect = 'copy'
     }
     const onLeave = () => {
       depth = Math.max(0, depth - 1)

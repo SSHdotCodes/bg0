@@ -283,19 +283,62 @@ describe('Remover image drops', () => {
   test.each([
     ['text/plain', 'ordinary selected text'],
     ['text/uri-list', 'https://example.com/'],
-  ])('leaves ordinary %s drags to the browser', (type, value) => {
+  ])('leaves ordinary %s drops to the browser', (type, value) => {
     const remove = mock(() => Promise.resolve(resultWithSource()))
     const view = render(<Remover removeBackgroundImpl={remove} />)
     const transfer = new DataTransfer()
     transfer.setData(type, value)
 
     expect(fireEvent.dragEnter(window, { dataTransfer: transfer })).toBe(true)
-    expect(fireEvent.dragOver(window, { dataTransfer: transfer })).toBe(true)
+    // Admit the drop to inspect its protected contents, but leave the actual
+    // drop uncancelled and do not show image feedback for ordinary strings.
+    expect(fireEvent.dragOver(window, { dataTransfer: transfer })).toBe(false)
     expect(fireEvent.drop(window, { dataTransfer: transfer })).toBe(true)
     expect(view.getByText('Drop an image anywhere on this page')).toBeTruthy()
     expect(view.queryByText(/Export the photo from Photos/)).toBeNull()
     expect(remove).not.toHaveBeenCalled()
   })
+
+  test('preserves native text dragging into editable controls', () => {
+    const view = render(
+      <>
+        <Remover />
+        <textarea aria-label="Text drop target" />
+      </>,
+    )
+    const transfer = new DataTransfer()
+    transfer.setData('text/plain', 'ordinary selected text')
+    const input = view.getByRole('textbox', { name: 'Text drop target' })
+
+    expect(fireEvent.dragOver(input, { dataTransfer: transfer })).toBe(true)
+    expect(fireEvent.drop(input, { dataTransfer: transfer })).toBe(true)
+    expect(view.queryByText(/Export the photo from Photos/)).toBeNull()
+  })
+
+  test.each(['text/uri-list', 'text/plain'])(
+    'accepts a protected %s transfer before its local file URL becomes readable',
+    async (type) => {
+      const remove = mock(() => Promise.resolve(resultWithSource()))
+      const view = render(<Remover removeBackgroundImpl={remove} />)
+      const transfer = new DataTransfer()
+      transfer.setData(type, 'file:///Photos%20Library/fixture.jpeg')
+      const getData = mock(() => '')
+      Object.defineProperty(transfer, 'getData', { value: getData })
+
+      expect(fireEvent.dragEnter(window, { dataTransfer: transfer })).toBe(true)
+      expect(fireEvent.dragOver(window, { dataTransfer: transfer })).toBe(false)
+      expect(view.getByText('Drop an image anywhere on this page')).toBeTruthy()
+      getData.mockReturnValue('file:///Photos%20Library/fixture.jpeg')
+      expect(fireEvent.drop(window, { dataTransfer: transfer })).toBe(false)
+
+      await waitFor(() => {
+        expect(
+          view.getAllByText(/Export the photo from Photos/).length,
+        ).toBeGreaterThan(0)
+      })
+      expect(remove).not.toHaveBeenCalled()
+    },
+  )
 
   test.each(['text/uri-list', 'text/plain'])(
     'prevents navigation for a Photos file link exposed as %s',
