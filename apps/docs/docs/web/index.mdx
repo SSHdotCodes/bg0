@@ -33,4 +33,4 @@ Copying an image needs a secure page. That is always true on bg0.dev over HTTPS.
 
 ## Hardware
 
-BG0 uses full BiRefNet on capable GPUs and CPU-only browsers. Devices with limited memory or GPU capabilities use BiRefNet-lite. If a model cannot load or run, BG0 retries with a compatible model automatically. Processing time varies by device; the WebAssembly compatibility path is slower than WebGPU.
+BG0 uses browser hardware hints to choose whether to try full BiRefNet or the smaller BiRefNet-lite first. Those hints cannot guarantee compatibility. If the selected model cannot load or run, BG0 attempts the lite model and WebAssembly fallbacks automatically. Processing time varies by device. See the browser library's [selection rules and verification scope](/library#automatic-model-selection) for the thresholds and environments tested.

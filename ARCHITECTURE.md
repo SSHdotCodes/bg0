@@ -52,26 +52,33 @@ arbitrary exception messages and stack text stay in the browser.
 
 ## Automatic model selection
 
-`@bg0/browser` probes an actual WebGPU adapter before choosing a model. Supported
-Chromium browsers with fp16 shaders, a 256 MiB buffer limit, a 128 MiB storage
-binding limit, and no reported RAM limit below 4 GiB prefer full BiRefNet.
-Missing RAM hints do not exclude otherwise capable devices. The full Swin-L
-model uses a browser-compatible 512px export; the lite Swin-T export also takes
+`@bg0/browser` probes an actual WebGPU adapter before choosing which model to
+attempt first. Chromium browsers reporting fp16 shaders, a 256 MiB buffer limit,
+a 128 MiB storage binding limit, and no RAM hint below 4 GiB attempt full BiRefNet.
+Missing RAM hints do not exclude a device. These are selection heuristics, not
+verified compatibility claims. The full Swin-L model uses a patched 512px
+export; the lite Swin-T export also takes
 512px input. Both weights and processor configurations are pinned by revision.
 
-Known low-memory devices retain lite on WebGPU. Without a usable fp16 GPU,
+Browsers reporting low memory attempt lite on WebGPU. Without an eligible fp16 GPU,
 browsers reporting at least four logical CPU cores and no RAM hint below 4 GiB
-use full BiRefNet on WASM; iOS and less capable or unknown CPUs retain lite.
+attempt full BiRefNet on WASM; iOS and smaller or unknown CPU counts select lite.
 A full-model loading or inference failure falls back to lite on the same
 provider, then lite on WASM if necessary.
 Failed full-model and GPU engines are skipped for the page session and disposed
-when no inference is using them. A full-model failure does not disable lite WebGPU.
+after pending preparation and removal calls release them, including refinement.
+A full-model failure does not disable lite WebGPU.
 The existing `quality` option controls mask refinement independently of model
 selection. Detection and fallback stay inside the browser package.
 
-Transformers.js 4 is required for the full export's GPU operators. The unpatched
-1024px full export exceeds browser shader binding limits; increasing available
-RAM alone does not make that graph usable.
+Local verification exercised full and lite models on WebGPU and WASM with an
+Apple M4 Max, 64 GiB RAM, macOS, and Chrome for Testing 153. Low-memory and
+CPU-only selection used simulated hints on that Mac. Other physical devices,
+Safari, Firefox, and the deployed origin remain unverified for this change.
+
+Transformers.js 4 ran the full export's GPU operators in that environment;
+3.8.1 failed the full 512px graph, and the unpatched 1024px full export exceeded
+the tested adapter's shader binding limits despite sufficient RAM.
 
 ## Model cache
 

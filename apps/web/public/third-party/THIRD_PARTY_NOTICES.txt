@@ -22,7 +22,9 @@ Exact corresponding source archives are available under the source/ directory:
 
 The same directory includes heic-to-primary.patch, guarded-transform.ts, and
 BUILD.md, which document the source modification and reproduce the exact
-production artifact from the pinned upstream distribution file.## BiRefNet browser models
+production artifact from the pinned upstream distribution file.
+
+## BiRefNet browser models
 
 BG0 downloads one of two MIT-licensed ONNX exports. The weights are not bundled
 in this repository or package; their original license applies when downloaded

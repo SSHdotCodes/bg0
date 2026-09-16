@@ -84,9 +84,11 @@ type ProcessorRunner = (image: unknown) => Promise<Record<string, unknown>>
 type Engine = EngineChoice & {
   model: ModelRunner
   processor: ProcessorRunner
-  activeRuns: number
-  retired: boolean
-  disposal?: Promise<void>
+}
+type EngineLease = {
+  engine: Engine
+  retire: () => Promise<void>
+  release: () => Promise<void>
 }
 
 type EngineProgress = { progress: number; initializing: boolean }
@@ -94,6 +96,9 @@ type EngineLoad = {
   promise: Promise<Engine>
   listeners: Set<(progress: number, initializing: boolean) => void>
   progress?: EngineProgress
+  users: number
+  retired: boolean
+  disposal?: Promise<void>
 }
 
 const engineLoads = new Map<string, EngineLoad>()
@@ -113,7 +118,7 @@ export function getBrowserCapabilities(): BrowserCapabilities {
 
 export function clearModelCache(): void {
   for (const load of engineLoads.values()) {
-    void load.promise.then(retireEngine).catch(() => undefined)
+    void retireEngine(load)
   }
   engineLoads.clear()
   failedEngines.clear()
@@ -132,11 +137,15 @@ export function clearModelCache(): void {
  * Concurrent calls share the same initialization work with removeBackground.
  */
 export async function prepareBackgroundRemoval(): Promise<ExecutionProvider> {
-  const engine = await getPreferredEngine(
+  const lease = await getPreferredEngine(
     await getPreferredChoices(),
     () => undefined,
   )
-  return engine.provider
+  try {
+    return lease.engine.provider
+  } finally {
+    await lease.release()
+  }
 }
 
 export async function removeBackground(
@@ -151,6 +160,7 @@ export async function removeBackground(
     options.onProgress?.({ ...progress, progress: reportedProgress })
   }
   let decodedImage: ImageBitmap | undefined
+  let lease: EngineLease | undefined
 
   try {
     throwIfCancelled(options.signal)
@@ -166,7 +176,7 @@ export async function removeBackground(
     )
     throwIfCancelled(options.signal)
 
-    let engine = await getPreferredEngine(
+    lease = await getPreferredEngine(
       choices,
       (progress, initializing, modelIsCached) => {
         notify({
@@ -181,6 +191,7 @@ export async function removeBackground(
       },
       options.signal,
     )
+    let engine = lease.engine
     throwIfCancelled(options.signal)
 
     notify({
@@ -199,7 +210,7 @@ export async function removeBackground(
     while (true) {
       throwIfCancelled(options.signal)
       try {
-        inference = await runInference(engine, source)
+        inference = await inferMask(engine, source)
         if (
           !inference.inspection.valid ||
           (engine.provider === 'webgpu' &&
@@ -216,14 +227,16 @@ export async function removeBackground(
         )
           throw error
         rememberEngineFailure(engine)
-        await retireEngine(engine)
+        await lease.retire()
+        await lease.release()
+        lease = undefined
         throwIfCancelled(options.signal)
         notify({
           stage: 'preparing',
           progress: 0.74,
           message: 'Switching to a compatible model…',
         })
-        engine = await getPreferredEngine(
+        lease = await getPreferredEngine(
           choices,
           (progress, initializing, cached) => {
             notify({
@@ -236,6 +249,7 @@ export async function removeBackground(
           },
           options.signal,
         )
+        engine = lease.engine
         throwIfCancelled(options.signal)
         notify({
           stage: 'processing',
@@ -259,7 +273,7 @@ export async function removeBackground(
           message: 'Refining fine details…',
         })
       },
-      infer: (croppedSource) => runInference(engine, croppedSource),
+      infer: (croppedSource) => inferMask(engine, croppedSource),
     })
 
     notify({ stage: 'finishing', progress: 0.92, message: 'Finishing edges…' })
@@ -293,6 +307,7 @@ export async function removeBackground(
     throw normalizeError(error)
   } finally {
     decodedImage?.close()
+    await lease?.release()
   }
 }
 
@@ -304,12 +319,14 @@ async function getPreferredEngine(
     cached: boolean,
   ) => void,
   signal?: AbortSignal,
-): Promise<Engine> {
+): Promise<EngineLease> {
   let lastError: unknown
   for (const choice of choices) {
     throwIfCancelled(signal)
     if (failedEngines.has(engineKey(choice))) continue
     const cached = await isModelCached(choice.definition)
+    throwIfCancelled(signal)
+    if (failedEngines.has(engineKey(choice))) continue
     try {
       return await getEngine(choice, (progress, initializing) => {
         onDownload(progress, initializing, cached)
@@ -362,14 +379,14 @@ function rememberEngineFailure(choice: EngineChoice): void {
   }
 }
 
-async function retireEngine(engine: Engine): Promise<void> {
-  engine.retired = true
-  if (engine.activeRuns > 0) return
-  engine.disposal ??= engine.model
-    .dispose()
+async function retireEngine(load: EngineLoad): Promise<void> {
+  load.retired = true
+  if (load.users > 0) return
+  load.disposal ??= load.promise
+    .then((engine) => engine.model.dispose())
     .then(() => undefined)
     .catch(() => undefined)
-  await engine.disposal
+  await load.disposal
 }
 
 function canTryWebgpu(): boolean {
@@ -393,7 +410,7 @@ function rememberWebgpuFailure(): void {
 async function getEngine(
   choice: EngineChoice,
   onDownload: (progress: number, initializing: boolean) => void,
-): Promise<Engine> {
+): Promise<EngineLease> {
   const key = engineKey(choice)
   let load = engineLoads.get(key)
   if (!load) {
@@ -406,22 +423,43 @@ async function getEngine(
         notifyEngineProgress(listener, currentLoad.progress)
       }
     })
-    currentLoad = { promise, listeners }
+    currentLoad = { promise, listeners, users: 0, retired: false }
     load = currentLoad
     engineLoads.set(key, load)
   }
 
-  load.listeners.add(onDownload)
+  // Reserve before awaiting initialization or notifying callers: a cache reset
+  // must preserve pending acquisitions as well as active inference/refinement.
+  const reservedLoad = load
+  reservedLoad.users++
+  let released = false
+  const release = async () => {
+    if (released) return
+    released = true
+    reservedLoad.users--
+    if (reservedLoad.retired) await retireEngine(reservedLoad)
+  }
+  reservedLoad.listeners.add(onDownload)
   try {
-    if (load.progress) notifyEngineProgress(onDownload, load.progress)
-    const engine = await load.promise
-    if (engineLoads.get(key) === load) load.progress = undefined
-    return engine
+    if (reservedLoad.progress) {
+      notifyEngineProgress(onDownload, reservedLoad.progress)
+    }
+    const engine = await reservedLoad.promise
+    if (engineLoads.get(key) === reservedLoad) reservedLoad.progress = undefined
+    return {
+      engine,
+      retire: () => {
+        if (engineLoads.get(key) === reservedLoad) engineLoads.delete(key)
+        return retireEngine(reservedLoad)
+      },
+      release,
+    }
   } catch (error) {
-    if (engineLoads.get(key) === load) engineLoads.delete(key)
+    if (engineLoads.get(key) === reservedLoad) engineLoads.delete(key)
+    await release()
     throw error
   } finally {
-    load.listeners.delete(onDownload)
+    reservedLoad.listeners.delete(onDownload)
   }
 }
 
@@ -442,17 +480,6 @@ function modelLoadError(error: unknown) {
     'The local model could not be loaded. Check your connection and try again.',
     { cause: error },
   )
-}
-
-async function runInference(engine: Engine, source: unknown) {
-  if (engine.retired) throw new Error('The model was released')
-  engine.activeRuns++
-  try {
-    return await inferMask(engine, source)
-  } finally {
-    engine.activeRuns--
-    if (engine.retired) await retireEngine(engine)
-  }
 }
 
 async function inferMask(engine: Engine, source: unknown) {
@@ -592,7 +619,7 @@ async function loadEngine(
     dtype: 'fp16',
     progress_callback: progressCallback,
   })) as unknown as ModelRunner
-  return { model, processor, ...choice, activeRuns: 0, retired: false }
+  return { model, processor, ...choice }
 }
 
 function throwIfCancelled(signal?: AbortSignal): void {

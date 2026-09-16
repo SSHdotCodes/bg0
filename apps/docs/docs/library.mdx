@@ -31,21 +31,32 @@ const url = URL.createObjectURL(result.blob)
 
 ## Automatic model selection
 
-The engine prefers full BiRefNet on supported Chromium WebGPU adapters with
-fp16 shaders, at least a 256 MiB buffer limit and a 128 MiB storage binding
+The engine uses hardware hints to decide which model to attempt first. It tries
+full BiRefNet on Chromium WebGPU adapters reporting fp16 shaders,
+at least a 256 MiB buffer limit and a 128 MiB storage binding
 limit. A reported device-memory hint below 4 GiB keeps the lite model; browsers
-that omit that hint can still use full BiRefNet. GPU brand and CPU count do not
-restrict GPU selection. Without a usable fp16 GPU, browsers reporting at least
-four logical CPU cores use full BiRefNet on WASM unless they report less than
+that omit that hint remain eligible for full BiRefNet. GPU brand and CPU count
+do not restrict GPU selection. Without an eligible fp16 GPU, browsers reporting
+at least four logical CPU cores attempt full BiRefNet on WASM unless they report less than
 4 GiB of memory or need the iOS single-threaded compatibility path. Other
-CPU-only browsers use lite. Both exports take 512px input; the full model uses
-the larger Swin-L backbone.
+CPU-only browsers attempt lite. These thresholds are selection heuristics,
+not a guarantee that a device can run the selected model. Both exports take
+512px input; the full model uses the larger Swin-L backbone.
 
 If loading or running the full model fails, the engine retries with lite on
 the same provider, then lite on WASM. Failed full-model and GPU combinations
 are skipped for the current page session.
 `prepareBackgroundRemoval()` uses the same selection and shares initialization
 with removal calls. The `quality` option controls mask refinement separately.
+
+### Verification scope
+
+Local verification exercised full and lite BiRefNet with WebGPU and WASM on an
+Apple M4 Max with 64 GiB RAM, macOS, and Chrome for Testing 153. WebGPU used the
+physical Apple Metal adapter. Low-memory and CPU-only selection were tested by
+overriding browser hints on that same Mac; they do not establish support on
+physical low-memory devices. Windows, Android, iOS, Safari, Firefox, and the
+deployed origin have not been verified for this model-selection change.
 
 ## Options
 
@@ -93,4 +104,4 @@ Use this to warn users on the WASM path that a large photo will take longer.
 
 ## Model caching
 
-The selected model (about 452 MiB for full BiRefNet or 94 MiB for lite) is fetched from the Hugging Face hub and kept in browser storage. Calls in the same page reuse the initialized model. After a reload, BG0 reuses the stored files but still initializes ONNX and uploads weights to WebGPU. Browsers may evict the files under storage pressure. `clearModelCache()` releases initialized engines, resets hardware selection and failure state, and clears the IndexedDB fallback cache. Files already in the browser Cache API may still be reused.
+The selected model (about 452 MiB for full BiRefNet or 94 MiB for lite) is fetched from the Hugging Face hub and kept in browser storage. Calls in the same page reuse the initialized model. After a reload, BG0 reuses the stored files but still initializes ONNX and uploads weights to WebGPU. Browsers may evict the files under storage pressure. `clearModelCache()` resets hardware selection and failure state and clears the IndexedDB fallback cache. It releases engines after any pending preparation or removal calls finish, including refinement. Files already in the browser Cache API may still be reused.

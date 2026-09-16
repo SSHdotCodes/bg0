@@ -15,6 +15,7 @@ import {
   removeBackground,
 } from './index'
 import { FULL_MODEL, LITE_MODEL } from './models'
+import * as refinement from './refinement'
 
 const navigatorDescriptor = Object.getOwnPropertyDescriptor(
   globalThis,
@@ -253,6 +254,112 @@ describe('automatic model lifecycle', () => {
       LITE_MODEL.id,
       FULL_MODEL.id,
     ])
+  })
+
+  test('cache reset after acquisition keeps the selected engine alive until removal finishes', async () => {
+    const full = model()
+    const load = spyOn(AutoModel, 'from_pretrained').mockResolvedValue(
+      full as never,
+    )
+    const result = await removeBackground(png, {
+      onProgress: ({ stage }) => {
+        if (stage === 'processing') clearModelCache()
+      },
+    })
+    expect(result.model).toBe('birefnet')
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(full).toHaveBeenCalledTimes(1)
+    expect(full.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  test('cache reset during loading preserves the reservation for the pending removal', async () => {
+    const full = model()
+    let reset = false
+    const load = spyOn(AutoModel, 'from_pretrained').mockImplementation(
+      async () => {
+        if (!reset) {
+          reset = true
+          clearModelCache()
+        }
+        await Promise.resolve()
+        return full as never
+      },
+    )
+    expect((await removeBackground(png)).model).toBe('birefnet')
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(full).toHaveBeenCalledTimes(1)
+    expect(full.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  test('cache reset between base inference and refinement does not release the model', async () => {
+    const full = model()
+    spyOn(AutoModel, 'from_pretrained').mockResolvedValue(full as never)
+    spyOn(refinement, 'createMaskRefinement').mockImplementation(
+      async ({ infer, source }) => {
+        clearModelCache()
+        await Promise.resolve()
+        expect(full.dispose).not.toHaveBeenCalled()
+        await infer(source)
+        return undefined
+      },
+    )
+    expect((await removeBackground(png, { quality: 'quality' })).model).toBe(
+      'birefnet',
+    )
+    expect(full).toHaveBeenCalledTimes(2)
+    expect(full.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  test('cache reset waits for every concurrent removal before disposal', async () => {
+    const full = model()
+    spyOn(AutoModel, 'from_pretrained').mockResolvedValue(full as never)
+    const reachedFinishing = Promise.withResolvers<void>()
+    const finishSecond = Promise.withResolvers<void>()
+    let finishing = 0
+    spyOn(image, 'maskToPng').mockImplementation(async () => {
+      finishing++
+      if (finishing === 2) {
+        clearModelCache()
+        reachedFinishing.resolve()
+        await finishSecond.promise
+      } else {
+        await reachedFinishing.promise
+      }
+      return png
+    })
+    const first = removeBackground(png)
+    const second = removeBackground(png)
+    await reachedFinishing.promise
+    try {
+      expect((await first).model).toBe('birefnet')
+      expect(full.dispose).not.toHaveBeenCalled()
+    } finally {
+      finishSecond.resolve()
+      await second
+    }
+    expect(full.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  test('cancellation after cache reset releases the acquired model without inference', async () => {
+    const controller = new AbortController()
+    const full = model()
+    const load = spyOn(AutoModel, 'from_pretrained').mockResolvedValue(
+      full as never,
+    )
+    await expect(
+      removeBackground(png, {
+        signal: controller.signal,
+        onProgress: ({ stage }) => {
+          if (stage === 'processing') {
+            clearModelCache()
+            controller.abort()
+          }
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'cancelled' })
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(full).not.toHaveBeenCalled()
+    expect(full.dispose).toHaveBeenCalledTimes(1)
   })
 
   test('all load failures remain useful and WASM can be retried', async () => {

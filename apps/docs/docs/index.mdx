@@ -18,7 +18,7 @@ BG0 is an open-source, browser-only background remover. Choose an image, remove 
 
 BG0 runs [BiRefNet](https://github.com/ZhengPeng7/BiRefNet), a segmentation model that predicts an alpha mask for the subject of a photo. The mask is composited onto the original pixels to produce a PNG with a transparent background.
 
-The web app and `@bg0/browser` automatically select a pinned full BiRefNet ONNX model on capable WebGPU devices and CPU-only browsers, with BiRefNet-lite for constrained hardware and compatibility. Images stay on your device throughout selection and fallback.
+The web app and `@bg0/browser` use browser hardware hints to choose whether to attempt a pinned full BiRefNet ONNX model or BiRefNet-lite, with automatic fallbacks if the selected model cannot run. See the [selection rules and verification scope](/library#automatic-model-selection) for details. Images stay on your device throughout selection and fallback.
 
 ## Privacy
 
