@@ -437,11 +437,23 @@ export function Remover({
     const onDrop = (event: DragEvent) => {
       depth = 0
       setIsDragging(false)
-      if (!event.dataTransfer || !isFileTransfer(event.dataTransfer)) return
+      const data = event.dataTransfer
+      if (!data) return
+      const fileTransfer = isFileTransfer(data)
+      const protectedString =
+        !isEditableTarget(event.target) &&
+        (data.types.includes('text/uri-list') ||
+          data.types.includes('text/plain'))
+      const unreadableProtectedString =
+        protectedString &&
+        [data.getData('text/uri-list'), data.getData('text/plain')].every(
+          (value) => value.length === 0,
+        )
+      if (!fileTransfer && !unreadableProtectedString) return
       // Photos can expose a file URL without granting access to the file.
       // Cancel navigation even when there is no readable file in the drop.
       event.preventDefault()
-      const file = fileFromDrop(event.dataTransfer)
+      const file = fileFromDrop(data)
       if (file) {
         void process(file, 'drop')
       } else {

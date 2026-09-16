@@ -386,6 +386,22 @@ describe('Remover image drops', () => {
     expect(remove).not.toHaveBeenCalled()
   })
 
+  test('prevents navigation when a protected file URL is still unreadable at drop', async () => {
+    const remove = mock(() => Promise.resolve(resultWithSource()))
+    const view = render(<Remover removeBackgroundImpl={remove} />)
+    const transfer = new DataTransfer()
+    transfer.setData('text/uri-list', 'file:///Photos%20Library/fixture.jpeg')
+    Object.defineProperty(transfer, 'getData', { value: () => '' })
+
+    expect(fireEvent.drop(window, { dataTransfer: transfer })).toBe(false)
+    await waitFor(() => {
+      expect(
+        view.getAllByText(/Export the photo from Photos/).length,
+      ).toBeGreaterThan(0)
+    })
+    expect(remove).not.toHaveBeenCalled()
+  })
+
   test.each(['files', 'items'])(
     'processes a readable dropped image from DataTransfer.%s',
     async (source) => {
